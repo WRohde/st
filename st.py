@@ -3,41 +3,42 @@ import shlex
 import time
 
 # Use this one for Mac/Linux
-DEFAULT_DEV = '/dev/tty.KeySerial1'
+# DEFAULT_DEV = '/dev/tty.KeySerial1'
 
 # Use this one for PC
 DEFAULT_DEV = 'COM7'
+# DEFAULT_BAUD_RATE = 9600
 DEFAULT_BAUD_RATE = 19200
 DEFAULT_TIMEOUT = 0.1
 
 # Roboforth Strings
-CR = '\r'
-LF = '\n'
+CR = b'\r'
+LF = b'\n'
 
-PURGE = 'PURGE'
-ROBOFORTH = 'ROBOFORTH'
-DECIMAL = 'DECIMAL'
-START = 'START'
-JOINT = 'JOINT'
-CALIBRATE = 'CALIBRATE'
-HOME = 'HOME'
-WHERE = 'WHERE'
-CARTESIAN = 'CARTESIAN'
-SPEED = 'SPEED'
-ACCEL = 'ACCEL'
-MOVETO = 'MOVETO'
-HAND = 'HAND'
-WRIST = 'WRIST'
-ENERGIZE = 'ENERGIZE'
-DE_ENERGIZE = 'DE-ENERGIZE'
-QUERY = ' ?'
-IMPERATIVE = ' !'
-TELL = 'TELL'
-MOVE = 'MOVE'
-CARTESIAN_NEW_ROUTE = 'CARTESIAN NEW ROUTE'
-RESERVE = 'RESERVE'
+PURGE = b'PURGE'
+ROBOFORTH = b'ROBOFORTH'
+DECIMAL = b'DECIMAL'
+START = b'START'
+JOINT = b'JOINT'
+CALIBRATE = b'CALIBRATE'
+HOME = b'HOME'
+WHERE = b'WHERE'
+CARTESIAN = b'CARTESIAN'
+SPEED = b'SPEED'
+ACCEL = b'ACCEL'
+MOVETO = b'MOVETO'
+HAND = b'HAND'
+WRIST = b'WRIST'
+ENERGIZE = b'ENERGIZE'
+DE_ENERGIZE = b'DE-ENERGIZE'
+QUERY = b' ?'
+IMPERATIVE = b' !'
+TELL = b'TELL'
+MOVE = b'MOVE'
+CARTESIAN_NEW_ROUTE = b'CARTESIAN NEW ROUTE'
+RESERVE = b'RESERVE'
 
-OK = 'OK'
+OK = b'OK'
 
 
 class StPosCart():
@@ -76,7 +77,7 @@ In [36]:
     '''
 
     def __init__(self, dev=DEFAULT_DEV, baud=DEFAULT_BAUD_RATE,
-                 init=True, to=DEFAULT_TIMEOUT, debug=False):
+                 startup=True, to=DEFAULT_TIMEOUT, debug=False):
         self.cxn = s.Serial(dev, baudrate=baud, timeout=to)
         # TODO
         # Check and parse return values of all ROBOFORTH methods called.
@@ -84,18 +85,24 @@ In [36]:
         self.curr_pos = StPosCart()
         self.prev_pos = StPosCart()
         self.block_timeout = 10
-        if init:
-            self.cxn.flushInput()
-            self.purge()
-            self.roboforth()
-            self.joint()
-            self.start()
-            self.calibrate()
-            self.home()
-            self.cartesian()
-            self.where()
-
+        if startup:
+            try:
+                self.startup()
+            except:
+                print("startup procedure failed")
         self.tool_length = 0
+
+    def startup(self):
+        self.cxn.flushInput()
+        self.purge()
+        self.roboforth()
+        self.start() 
+        
+        self.calibrate()           
+        self.home()
+        self.joint()
+        self.where()
+
 
     def set_tool_length(self, length):
         self.tool_length = length
@@ -156,19 +163,23 @@ In [36]:
     def block_on_result(self, cmd):
         t = time.time()
         s = self.cxn.read(self.cxn.inWaiting())
-
+        
         while s[-5:-3] != OK:
+            # print(s)
             #Match '>' only at the end of the string
-            if s[-1:] == '>':
+            start_time = time.time()
+            if s[-1:] == b'>':
                 if self.debug:
-                    print('Command ' + cmd + ' completed without ' +
+                    print('Command ' + str(cmd) + ' completed without ' +
                           'verification of success.')
                 raise Exception('Arm command failed to execute as expected.', s)
             s += self.cxn.read(self.cxn.inWaiting())
+            if time.time() - start_time > self.block_timeout:
+                raise Exception('block on result timed out', s)
 
         if self.debug:
-            print('Command ' + cmd + ' completed successfully.')
-        return s
+            print('Command ' + str(cmd) + ' completed successfully.')
+        return str(s,encoding="utf-8")
 
     def get_status(self):
         if self.cxn.isOpen():
@@ -182,7 +193,7 @@ In [36]:
         return int(result.split(' ')[-2])
 
     def set_speed(self, speed):
-        cmd = str(speed) + ' ' + SPEED + IMPERATIVE
+        cmd = bytes(str(speed),"utf-8") + b' ' + SPEED + IMPERATIVE
         self.cxn.flushInput()
         self.cxn.write(cmd + CR)
         self.block_on_result(cmd)
@@ -195,35 +206,51 @@ In [36]:
         return int(result.split(' ')[-2])
 
     def set_accel(self, accel):
-        cmd = str(accel) + ' ' + ACCEL + IMPERATIVE
+        cmd = bytes(str(accel),"utf-8") + b' ' + ACCEL + IMPERATIVE
         print('Setting acceleration to %d' % accel)
         self.cxn.flushInput()
         self.cxn.write(cmd + CR)
         self.block_on_result(cmd)
 
     def move_to(self, pos, block=True):
-        cmd = str(pos[0]) + ' ' + str(pos[1]) + ' ' + str(pos[2]) + ' MOVETO'
+        self.cartesian()
+        cmd = str(pos[0]) + ' ' + str(pos[1]) + ' ' + str(pos[2]) +  ' MOVETO'
+        cmd = bytes(cmd,"utf-8")
         self.cxn.flushInput()
         self.cxn.write(cmd + CR)
         if block:
             self.block_on_result(cmd)
             self.where()
 
+    def joint_move(self,pos,block=True):
+        """
+        move to joint position [waist,shoulder,elbow,hand,wrist] 
+        Note: units are in whatever ST robotics use, I recommend choosing poses by trial and error
+        """
+
+        cmd = bytes(str(pos[4]),"utf-8") +b" "+ bytes(str(pos[3]),"utf-8") +b" "+ bytes(str(pos[2]),"utf-8") +b" "+ bytes(str(pos[1]),"utf-8") +b' '+ bytes(str(pos[0]),"utf-8") +b' JMA'
+        
+        self.joint()
+        self.cxn.flushInput()
+        self.cxn.write(cmd + CR)
+        self.block_on_result(cmd)
+        self.where()
+
     def move(self, del_pos):
-        cmd = str(del_pos[0]) + ' ' + str(del_pos[1]) + ' ' + str(del_pos[2]) + ' MOVE'
+        cmd = bytes(str(del_pos[0]),"utf-8")  + b' ' + bytes(str(del_pos[1]),"utf-8")  + b' ' + bytes(str(del_pos[2]),"utf-8")  + b' MOVE'
         self.cxn.flushInput()
         self.cxn.write(cmd + CR)
         self.block_on_result(cmd)
         self.where()
 
     def rotate_wrist(self, roll):
-        cmd = TELL + ' ' + WRIST + ' ' + str(roll) + ' ' + MOVETO
+        cmd = TELL + b' ' + WRIST + b' ' + bytes(str(roll),"utf-8") + b' ' + MOVETO
         self.cxn.flushInput()
         self.cxn.write(cmd + CR)
         self.block_on_result(cmd)
 
     def rotate_wrist_rel(self, roll_inc):
-        cmd = TELL + ' ' + WRIST + ' ' + str(roll_inc) + ' ' + MOVE
+        cmd = TELL + b' ' + WRIST + b' ' + bytes(str(roll_inc),"utf-8") + b' ' + MOVE
         self.cxn.flushInput()
         self.cxn.write(cmd + CR)
         self.block_on_result(cmd)
@@ -231,15 +258,15 @@ In [36]:
         self.where()
 
     def rotate_hand(self, pitch):
-        cmd = TELL + ' ' + HAND + ' ' + str(pitch) + ' ' + MOVETO
+        cmd = TELL + b' ' + HAND + b' ' + bytes(str(pitch),"utf-8") + b' ' + MOVETO
         self.cxn.flushInput()
         self.cxn.write(cmd + CR)
         self.block_on_result(cmd)
-        self.cartesian()
-        self.where()
+        # self.cartesian()
+        # self.where()
 
     def rotate_hand_rel(self, pitch_inc):
-        cmd = TELL + ' ' + HAND + ' ' + str(pitch_inc) + ' ' + MOVE
+        cmd = TELL + b' ' + HAND + b' ' + bytes(str(pitch_inc), "utf-8") + b' ' + MOVE
         self.cxn.flushInput()
         self.cxn.write(cmd + CR)
         self.block_on_result(cmd)
@@ -265,21 +292,23 @@ In [36]:
         self.cxn.flushInput()
         self.cxn.write(cmd + CR)
         res = self.block_on_result(cmd)
-        try:
-            lines = res.split('\r\n')
+#         try:
+        print(res)
+        lines = res.split('\r\n')
             #TODO: Need to account for possibility that arm is in decimal mode
 
-            cp = [int(x.strip().replace('.', ''))
-                  for x in shlex.split(lines[2])]
-            pp = [int(x.strip().replace('.', ''))
-                  for x in shlex.split(lines[3])[1:]]
-
-            self.curr_pos.set(cp)
-            self.prev_pos.set(pp)
-        except RuntimeError, e:
-            print('Exception in where.')
-            print(e)
-            self.curr_pos.set([0, 0, 0, 0, 0])
-            self.prev_pos.set([0, 0, 0, 0, 0])
+        cp = [int(x.strip().replace('.', '')) for x in shlex.split(lines[2])]
+        pp = [int(x.strip().replace('.', '')) for x in shlex.split(lines[3])[1:]]
+        self.curr_pos.set(cp)
+        self.prev_pos.set(pp)
+#         except RuntimeError, e:
+#             print('Exception in where.')
+#             print(e)
+#             self.curr_pos.set([0, 0, 0, 0, 0])
+#             self.prev_pos.set([0, 0, 0, 0, 0])
 
         return (self.curr_pos, self.prev_pos)
+
+    def close_connection(self):
+        self.cxn.close()
+        print("closed the serial connection")
